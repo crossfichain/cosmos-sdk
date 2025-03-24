@@ -6,9 +6,13 @@ package secp256k1
 import (
 	secp256k1 "github.com/btcsuite/btcd/btcec/v2"
 	"github.com/btcsuite/btcd/btcec/v2/ecdsa"
+	"golang.org/x/crypto/sha3"
+	"math/big"
 
 	"github.com/tendermint/tendermint/crypto"
 )
+
+var secp256k1halfN = new(big.Int).Rsh(secp256k1.S256().N, 1)
 
 // Sign creates an ECDSA signature on curve Secp256k1, using SHA256 on the msg.
 // The returned signature will be of the form R || S (in lower-S form).
@@ -46,6 +50,33 @@ func (pubKey *PubKey) VerifySignature(msg []byte, sigStr []byte) bool {
 		return false
 	}
 	return signature.Verify(crypto.Sha256(msg), pub)
+}
+
+// VerifyBytes verifies a signature of the form R || S.
+// It rejects signatures which are not in lower-S form.
+func (pubKey *PubKey) VerifySignatureEip191(msg []byte, sigStr []byte) bool {
+	if len(sigStr) != 64 {
+		return false
+	}
+	pub, err := secp256k1.ParsePubKey(pubKey.Key)
+	if err != nil {
+		return false
+	}
+	// parse the signature:
+	signature := signatureFromBytes(sigStr)
+	// Reject malleable signatures. libsecp256k1 does this check but btcec doesn't.
+	// see: https://github.com/ethereum/go-ethereum/blob/f9401ae011ddf7f8d2d95020b7446c17f8d98dc1/crypto/signature_nocgo.go#L90-L93
+	if big.NewInt(0).SetBytes(sigStr[32:64]).Cmp(secp256k1halfN) > 0 {
+		return false
+	}
+
+	return signature.Verify(keccak256(msg), pub)
+}
+
+func keccak256(bytes []byte) []byte {
+	hasher := sha3.NewLegacyKeccak256()
+	hasher.Write(bytes)
+	return hasher.Sum(nil)
 }
 
 // Read Signature struct from R || S. Caller needs to ensure
